@@ -26,14 +26,17 @@ laptop connects and takes static IP 192.168.4.2, then run: python app.py
 Dashboard: http://192.168.4.2:5000
 """
 
-from flask import Flask, Response, render_template, request, jsonify, redirect, session, send_from_directory, url_for
+from flask import (Flask, Response, render_template, request, jsonify, send_from_directory,
+                   session, redirect, url_for)
 from ultralytics import YOLO
 import cv2
 import numpy as np
 import mimetypes
 import os
-import glob
 import hmac
+import secrets
+from functools import wraps
+import glob
 import database
 from datetime import datetime
 from collections import deque
@@ -52,9 +55,7 @@ REQUIRED_FRONTEND_FILES = (
     os.path.join("templates", "index.html"),
     os.path.join("templates", "login.html"),
     os.path.join("static", "css", "style.css"),
-    os.path.join("static", "css", "login.css"),
     os.path.join("static", "js", "dashboard.js"),
-    os.path.join("static", "js", "login.js"),
 )
 
 
@@ -65,7 +66,7 @@ def check_frontend_files():
         raise SystemExit(
             "\nFrontend file(s) not found next to app.py:\n  - " + "\n  - ".join(missing) +
             "\n\nKeep this folder layout (app.py and database.py side by side):\n"
-            "  app.py\n  database.py\n  templates/index.html\n"
+            "  app.py\n  database.py\n  templates/index.html\n  templates/login.html\n"
             "  static/css/style.css\n  static/js/dashboard.js\n"
         )
 
@@ -77,31 +78,37 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, "templates"),
     static_folder=os.path.join(BASE_DIR, "static"),
 )
-app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
-app.config.update(
-    SESSION_COOKIE_HTTPONLY=True,
-    SESSION_COOKIE_SAMESITE="Lax",
-)
 
-LOGIN_USERNAME = "user"
-LOGIN_PASSWORD = "pass123"
-
-
-@app.before_request
-def require_login():
-    public_endpoints = {
-        "login",
-        "logout",
-        "static",
-        "verify_frame",
-        "periodic_frame",
-        "entry",
-        "exit_route",
-    }
-    if request.endpoint not in public_endpoints and not session.get("authenticated"):
-        return redirect(url_for("login"))
+# ---- LOGIN ------------------------------------------------------------------------
+# Change these (or set the CROWDSAFE_USER / CROWDSAFE_PASS environment variables) before
+# a real event. The ESP32 endpoints (/entry, /exit, /verify_frame, /periodic_frame) stay
+# open on purpose - the hardware cannot log in.
+LOGIN_USERNAME = os.environ.get("CROWDSAFE_USER", "admin")
+LOGIN_PASSWORD = os.environ.get("CROWDSAFE_PASS", "admin123")
+app.secret_key = os.environ.get("CROWDSAFE_SECRET") or secrets.token_hex(32)
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 
 
+def login_required(api=False):
+    """api=True -> answer 401 JSON (for the JS polling); otherwise redirect to /login."""
+    def decorator(view):
+        @wraps(view)
+        def wrapped(*args, **kwargs):
+            if not session.get("user"):
+                if api:
+                    return jsonify({"error": "login required"}), 401
+                return redirect(url_for("login"))
+            return view(*args, **kwargs)
+        return wrapped
+    return decorator
+
+
+def credentials_ok(username, password):
+    # compare_digest avoids leaking information through response timing
+    user_ok = hmac.compare_digest(username.encode(), LOGIN_USERNAME.encode())
+    pass_ok = hmac.compare_digest(password.encode(), LOGIN_PASSWORD.encode())
+    return user_ok and pass_ok
 # -----------------------------------------------------------------------------------
 
 # ---- Model: "s" instead of "n" - meaningfully better accuracy, still fast on CPU ----
@@ -136,22 +143,15 @@ ORANGE_THRESHOLD = 0.6   # 60% of capacity -> orange
 RED_THRESHOLD = 0.9      # 90% of capacity -> red
 CRITICAL_THRESHOLD = 1.0 # 100%+ -> red AND the flash alert
 
-# The ESP32 firmware already calls /entry and /exit after /verify_frame. Counting a
-# second time inside /verify_frame (via ?direction=) would double count, so it is OFF.
-# Turn it on only if your firmware sends ?direction=entry|exit and does NOT call /entry,/exit.
-AUTO_COUNT_FROM_VERIFY = False
-
 # ---- In-memory state ----
 entry_count = 0
 exit_count = 0
 latest_people_in_frame = 0
 latest_image_name = None
 latest_heatmap_name = None
-verified_people_count = 0
 # --- DATABASE INTEGRATION ---
 last_verify_image_name = None
 recent_human_confidences = deque(maxlen=CONFIRM_STREAK_REQUIRED)
-selected_orientation_index = 0
 
 # ---- Alert history (shown in its own dashboard tab) ----
 alert_log = deque(maxlen=100)
@@ -230,76 +230,20 @@ if entry_count > 0:
     add_alert(f"Server restarted - restored {entry_count} people inside", "info")
 
 
-def run_detection(img, search_rotations=True):
-    """Run person detection and return (img, annotated, boxes, is_human).
-
-    SPEED FIX: the previous version always ran YOLO on 4 rotated copies of every
-    frame (about 4x slower). The ESP32 waits for the /verify_frame reply with a
-    time limit, so a slow reply made it give up and never call /entry or /exit.
-    Now only the last orientation that worked is tried first (one pass, same
-    speed as the original). The other 3 rotations are tried only if that pass
-    finds nobody, and only when search_rotations is True.
-    """
-    global selected_orientation_index
-
-    rotations = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
-
-    def orient(index):
-        return img if rotations[index] is None else cv2.rotate(img, rotations[index])
-
-    def predict(frames):
-        return list(model.predict(
-            frames,
-            classes=[PERSON_CLASS_ID],
-            conf=CONF_THRESHOLD,
-            imgsz=640,
-            verbose=False,
-        ))
-
-    def detection_quality(result):
-        if result.boxes is None:
-            return 0, 0.0
-        boxes = result.boxes
-        count = len(boxes)
-        confidence_sum = float(boxes.conf.sum().item()) if boxes.conf is not None else 0.0
-        return count, confidence_sum
-
-    # Pass 1: the orientation that worked last time (starts as the normal, upright one).
-    best_index = selected_orientation_index
-    best_img = orient(best_index)
-    best_result = predict([best_img])[0]
-
-    # Pass 2 (only if nobody was found): try the remaining rotations in one batch.
-    if search_rotations and detection_quality(best_result)[0] == 0:
-        other_indexes = [i for i in range(len(rotations)) if i != best_index]
-        other_frames = [orient(i) for i in other_indexes]
-        other_results = predict(other_frames)
-        if len(other_results) != len(other_frames):
-            raise RuntimeError(
-                f"YOLO returned {len(other_results)} results for {len(other_frames)} image orientations"
-            )
-        winner = max(
-            range(len(other_results)),
-            key=lambda k: (*detection_quality(other_results[k]), -k),
-        )
-        if detection_quality(other_results[winner])[0]:
-            best_index = other_indexes[winner]
-            best_img = other_frames[winner]
-            best_result = other_results[winner]
-            selected_orientation_index = best_index
-
-    img = best_img
-    boxes = (
-        best_result.boxes.xyxy.cpu().numpy().tolist()
-        if best_result.boxes is not None
-        else []
-    )
-    annotated = best_result.plot()
-    detected_this_frame = bool(boxes)
+def run_detection(img):
+    """Runs YOLO person-only detection, returns (annotated_img, boxes, is_human_confirmed)."""
+    results = model.predict(img, classes=[PERSON_CLASS_ID], conf=CONF_THRESHOLD, imgsz=640, verbose=False)
+    boxes = []
+    annotated = img
+    detected_this_frame = False
+    for r in results:
+        boxes = r.boxes.xyxy.cpu().numpy().tolist() if r.boxes is not None else []
+        annotated = r.plot()
+        detected_this_frame = len(boxes) > 0
 
     recent_human_confidences.append(detected_this_frame)
-    is_human_confirmed = detected_this_frame   # single-frame result, used for /verify_frame
-    return img, annotated, boxes, is_human_confirmed
+    is_human_confirmed = detected_this_frame  # single-frame result, used for /verify_frame
+    return annotated, boxes, is_human_confirmed
 
 
 def build_heatmap(img, boxes):
@@ -331,35 +275,29 @@ def decode_upload():
     if not img_bytes:
         return None
     np_arr = np.frombuffer(img_bytes, np.uint8)
-    decode_flags = cv2.IMREAD_COLOR | cv2.IMREAD_IGNORE_ORIENTATION
-    return cv2.imdecode(np_arr, decode_flags)
+    return cv2.imdecode(np_arr, cv2.IMREAD_COLOR)
 
 
 @app.route("/verify_frame", methods=["POST"])
 def verify_frame():
-    """Called once per beam-break event. Verifies human-or-nature and 
-    automatically registers entry/exit if a direction query parameter is provided."""
+    """Called once per beam-break event (with the flash frame). Confirms
+    human-or-not so the ESP32 knows whether to count that crossing."""
     global latest_image_name, latest_heatmap_name, latest_people_in_frame
-    global last_verify_image_name, entry_count, exit_count, verified_people_count
-
-    verified_people_count = 0
-    # Check if a direction was passed in the URL (e.g. /verify_frame?direction=entry)
-    direction = request.args.get("direction", "").lower()
+    global last_verify_image_name
 
     img = decode_upload()
     if img is None:
         return jsonify({"error": "could not decode image", "is_human": False}), 400
 
-    img, annotated, boxes, is_human = run_detection(img)
+    annotated, boxes, is_human = run_detection(img)
     latest_people_in_frame = len(boxes)
-    verified_people_count = len(boxes) if is_human else 0
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"verify_{timestamp}.jpg"
-    
+    # Save every captured snapshot frame locally to static/captures/ and SAVE_DIR
     cv2.imwrite(os.path.join(CAPTURES_DIR, filename), annotated)
     cv2.imwrite(os.path.join(SAVE_DIR, filename), annotated)
-    
+    # --- DATABASE INTEGRATION ---
     last_verify_image_name = filename
     latest_image_name = filename
 
@@ -369,43 +307,14 @@ def verify_frame():
     cv2.imwrite(os.path.join(CAPTURES_DIR, heatmap_name), heatmap)
     latest_heatmap_name = heatmap_name
 
+    # Determine classification for audit logging
     trigger_type = "Human" if is_human else "Object/False Trigger"
     verify_direction = "TRIGGER" if is_human else "OBJECT"
 
-    # Log snapshot into SQLite audit trail
+    # Log EVERY captured snapshot frame into SQLite events table for audit trail
     safe_log_event(verify_direction, len(boxes), people_inside_count(), filename, trigger_type)
 
-    # AUTOMATIC COUNT REGISTRATION IF HUMAN AND DIRECTION IS PROVIDED
-    count_updated = False
-    if is_human and AUTO_COUNT_FROM_VERIFY:
-        if direction in ["entry", "in", "1"]:
-            people_crossed = len(boxes)
-            entry_count += people_crossed
-            safe_log_event("ENTRY", people_crossed, people_inside_count(), filename, "Human")
-            people_label = "person" if people_crossed == 1 else "people"
-            add_alert(
-                f"Entry recorded: {people_crossed} {people_label} "
-                f"({people_inside_count()} now inside)",
-                "entry",
-            )
-            check_zone_transition()
-            verified_people_count = 0
-            count_updated = True
-        elif direction in ["exit", "out", "2"]:
-            people_crossed = len(boxes)
-            if people_crossed > 0:
-                exit_count += people_crossed
-                safe_log_event("EXIT", people_crossed, people_inside_count(), filename, "Human")
-                people_label = "person" if people_crossed == 1 else "people"
-                add_alert(
-                    f"Exit recorded: {people_crossed} {people_label} "
-                    f"({people_inside_count()} now inside)",
-                    "exit",
-                )
-                check_zone_transition()
-                verified_people_count = 0
-                count_updated = True
-    elif not is_human:
+    if not is_human:
         add_alert(f"Non-human trigger ({trigger_type}) - {people_inside_count()} inside", "orange")
 
     cleanup_old_images()
@@ -414,10 +323,7 @@ def verify_frame():
         "is_human": bool(is_human),
         "people_detected": len(boxes),
         "trigger_type": trigger_type,
-        "image_filename": filename,
-        "entry_count": entry_count,
-        "exit_count": exit_count,
-        "people_inside": people_inside_count()
+        "image_filename": filename
     })
 
 
@@ -430,7 +336,7 @@ def periodic_frame():
     if img is None:
         return jsonify({"error": "could not decode image"}), 400
 
-    img, annotated, boxes, _ = run_detection(img, search_rotations=False)
+    annotated, boxes, _ = run_detection(img)
     latest_people_in_frame = len(boxes)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -451,67 +357,30 @@ def periodic_frame():
 
 @app.route("/entry", methods=["GET"])
 def entry():
-    global entry_count, verified_people_count
-    people_crossed = verified_people_count
-    verified_people_count = 0
-    if people_crossed == 0:
-        return jsonify({
-            "status": "ignored",
-            "message": "No verified people to count",
-            "entry_count": entry_count,
-            "people_inside": people_inside_count(),
-        })
-
-    entry_count += people_crossed
+    global entry_count
+    entry_count += 1
+    # TODO: pass n people once multi-person counting exists
     # --- DATABASE INTEGRATION ---
-    safe_log_event("ENTRY", people_crossed, people_inside_count(), last_verify_image_name, "Human")
-    people_label = "person" if people_crossed == 1 else "people"
-    add_alert(
-        f"Entry recorded: {people_crossed} {people_label} "
-        f"({people_inside_count()} now inside)",
-        "entry",
-    )
+    safe_log_event("ENTRY", 1, people_inside_count(), last_verify_image_name, "Human")
+    add_alert(f"Entry recorded - {people_inside_count()} now inside", "entry")
     check_zone_transition()
-    return jsonify({
-        "status": "ok",
-        "entry_count": entry_count,
-        "people_crossed": people_crossed,
-        "people_inside": people_inside_count(),
-    })
+    return jsonify({"status": "ok", "entry_count": entry_count})
 
 
 @app.route("/exit", methods=["GET"])
 def exit_route():
-    global exit_count, verified_people_count
-    people_crossed = verified_people_count
-    verified_people_count = 0
-    if people_crossed == 0:
-        return jsonify({
-            "status": "ignored",
-            "message": "No verified people to count",
-            "exit_count": exit_count,
-            "people_inside": people_inside_count(),
-        })
-
-    exit_count += people_crossed
+    global exit_count
+    exit_count += 1
+    # TODO: pass n people once multi-person counting exists
     # --- DATABASE INTEGRATION ---
-    safe_log_event("EXIT", people_crossed, people_inside_count(), last_verify_image_name, "Human")
-    people_label = "person" if people_crossed == 1 else "people"
-    add_alert(
-        f"Exit recorded: {people_crossed} {people_label} "
-        f"({people_inside_count()} now inside)",
-        "exit",
-    )
+    safe_log_event("EXIT", 1, people_inside_count(), last_verify_image_name, "Human")
+    add_alert(f"Exit recorded - {people_inside_count()} now inside", "exit")
     check_zone_transition()
-    return jsonify({
-        "status": "ok",
-        "exit_count": exit_count,
-        "people_crossed": people_crossed,
-        "people_inside": people_inside_count(),
-    })
+    return jsonify({"status": "ok", "exit_count": exit_count})
 
 
 @app.route("/reset", methods=["GET", "POST"])
+@login_required(api=True)
 def reset_counts():
     global entry_count, exit_count, latest_people_in_frame, last_zone_color
     entry_count = 0
@@ -539,6 +408,7 @@ def get_image(filename):
 
 
 @app.route("/status")
+@login_required(api=True)
 def status():
     """Polled by the dashboard's JS every couple seconds so the page updates
     live without a full reload."""
@@ -564,6 +434,7 @@ def status():
 
 # --- DATABASE INTEGRATION ---
 @app.route("/history")
+@login_required(api=True)
 def history():
     try:
         try:
@@ -581,6 +452,7 @@ def history():
 
 
 @app.route("/hourly")
+@login_required(api=True)
 def hourly():
     try:
         try:
@@ -595,6 +467,7 @@ def hourly():
 
 
 @app.route("/export.csv")
+@login_required()
 def export_csv():
     try:
         return Response(
@@ -607,40 +480,38 @@ def export_csv():
         return jsonify({"error": str(error)}), 500
 
 
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("user"):
+        return redirect(url_for("dashboard"))
+    error = None
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if credentials_ok(username, password):
+            session.clear()
+            session["user"] = username
+            return redirect(url_for("dashboard"))
+        error = "Incorrect username or password."
+    return render_template("login.html", error=error), (401 if error else 200)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
+
+
 @app.route("/")
+@login_required()
 def dashboard():
     # The page lives in templates/index.html; its styles are in static/css/style.css
     # and its script in static/js/dashboard.js (split out of this file unchanged).
     return render_template("index.html")
 
 
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if session.get("authenticated"):
-        return redirect(url_for("dashboard"))
-
-    error = None
-    username = ""
-    if request.method == "POST":
-        username = request.form.get("username", "").strip()
-        password = request.form.get("password", "")
-        if not hmac.compare_digest(username, LOGIN_USERNAME):
-            error = "User not found. Check your username and try again."
-        elif not hmac.compare_digest(password, LOGIN_PASSWORD):
-            error = "Incorrect password. Please try again."
-        else:
-            session.clear()
-            session["authenticated"] = True
-            return redirect(url_for("dashboard"))
-
-    return render_template("login.html", error=error, username=username)
-
-
-@app.route("/logout", methods=["POST"])
-def logout():
-    session.clear()
-    return redirect(url_for("login"))
-
-
 if __name__ == "__main__":
+    if LOGIN_USERNAME == "admin" and LOGIN_PASSWORD == "admin123":
+        print("NOTE: using the default login (admin / admin123). "
+              "Set CROWDSAFE_USER and CROWDSAFE_PASS to change it.")
     app.run(host="0.0.0.0", port=5000, debug=False)
