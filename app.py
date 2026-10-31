@@ -26,13 +26,14 @@ laptop connects and takes static IP 192.168.4.2, then run: python app.py
 Dashboard: http://192.168.4.2:5000
 """
 
-from flask import Flask, Response, render_template, request, jsonify, send_from_directory
+from flask import Flask, Response, render_template, request, jsonify, redirect, session, send_from_directory, url_for
 from ultralytics import YOLO
 import cv2
 import numpy as np
 import mimetypes
 import os
 import glob
+import hmac
 import database
 from datetime import datetime
 from collections import deque
@@ -49,8 +50,11 @@ mimetypes.add_type("text/javascript", ".js")
 
 REQUIRED_FRONTEND_FILES = (
     os.path.join("templates", "index.html"),
+    os.path.join("templates", "login.html"),
     os.path.join("static", "css", "style.css"),
+    os.path.join("static", "css", "login.css"),
     os.path.join("static", "js", "dashboard.js"),
+    os.path.join("static", "js", "login.js"),
 )
 
 
@@ -73,6 +77,31 @@ app = Flask(
     template_folder=os.path.join(BASE_DIR, "templates"),
     static_folder=os.path.join(BASE_DIR, "static"),
 )
+app.secret_key = os.environ.get("FLASK_SECRET_KEY") or os.urandom(32)
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+)
+
+LOGIN_USERNAME = "user"
+LOGIN_PASSWORD = "pass123"
+
+
+@app.before_request
+def require_login():
+    public_endpoints = {
+        "login",
+        "logout",
+        "static",
+        "verify_frame",
+        "periodic_frame",
+        "entry",
+        "exit_route",
+    }
+    if request.endpoint not in public_endpoints and not session.get("authenticated"):
+        return redirect(url_for("login"))
+
+
 # -----------------------------------------------------------------------------------
 
 # ---- Model: "s" instead of "n" - meaningfully better accuracy, still fast on CPU ----
@@ -528,6 +557,34 @@ def dashboard():
     # The page lives in templates/index.html; its styles are in static/css/style.css
     # and its script in static/js/dashboard.js (split out of this file unchanged).
     return render_template("index.html")
+
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if session.get("authenticated"):
+        return redirect(url_for("dashboard"))
+
+    error = None
+    username = ""
+    if request.method == "POST":
+        username = request.form.get("username", "").strip()
+        password = request.form.get("password", "")
+        if not hmac.compare_digest(username, LOGIN_USERNAME):
+            error = "User not found. Check your username and try again."
+        elif not hmac.compare_digest(password, LOGIN_PASSWORD):
+            error = "Incorrect password. Please try again."
+        else:
+            session.clear()
+            session["authenticated"] = True
+            return redirect(url_for("dashboard"))
+
+    return render_template("login.html", error=error, username=username)
+
+
+@app.route("/logout", methods=["POST"])
+def logout():
+    session.clear()
+    return redirect(url_for("login"))
 
 
 if __name__ == "__main__":
