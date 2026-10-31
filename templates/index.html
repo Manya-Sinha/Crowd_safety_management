@@ -1,173 +1,220 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Dynamic Crowd Safety Management System</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div id="critical-overlay"></div>
 
-    <html>
-    <head>
-        <title>Dynamic Safety Zone Monitoring System</title>
-        <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-    </head>
-    <body>
-        <div id="critical-overlay"></div>
-        <form class="dashboard-session" method="post" action="{{ url_for('logout') }}">
-            <span>Signed in</span>
-            <button type="submit">Sign out</button>
-        </form>
-        <h1>Dynamic Safety Zone Monitoring System</h1>
-        <p class="subtitle">Live view - updates automatically, no refresh needed</p>
+    <!-- ===== Full-screen CRITICAL takeover ===== -->
+    <div id="critical-screen" aria-live="assertive">
+        <div class="cs-inner">
+            <div class="cs-tag"><span class="cs-dot"></span>CRITICAL OVERCROWDING</div>
+            <h2 class="cs-title">CRITICAL</h2>
+            <p class="cs-msg"><span class="cs-exit-num" id="cs-exit-num">0</span><span class="cs-msg-text" id="cs-exit-text">people must leave the venue now</span></p>
+            <div class="cs-stats">
+                <div class="cs-stat"><span>People Inside</span><b id="cs-inside">0</b></div>
+                <div class="cs-stat"><span>Capacity</span><b id="cs-cap">0</b></div>
+                <div class="cs-stat"><span>Vacancy</span><b id="cs-vacancy">0</b></div>
+                <div class="cs-stat"><span>Safe Level</span><b id="cs-target">0</b></div>
+            </div>
+            <button type="button" class="cs-mute" id="cs-mute-btn" onclick="toggleAudioMute()">&#128266; Mute alarm</button>
+        </div>
+    </div>
 
-        <!-- Full-Impact Critical Warning Overlay/Banner -->
-        <div id="critical-alert-box">
-            <div class="crit-header-row">
-                <div class="crit-emergency-tag">
-                    <span class="crit-tag-dot"></span>
-                    <span>🚨 CRITICAL OVERCROWDING EMERGENCY</span>
-                </div>
-                <div class="crit-action-badge">EVACUATION LEVEL: IMMEDIATE ACTION REQUIRED</div>
+    <div class="app-shell">
+        <!-- ================= SIDEBAR ================= -->
+        <aside class="sidebar">
+            <div class="brand">
+                <svg class="brand-shield" viewBox="0 0 64 72" aria-hidden="true">
+                    <path d="M32 3 6 13v22c0 17 11 29 26 34 15-5 26-17 26-34V13z" fill="rgba(0,160,255,.12)" stroke="#19b4ff" stroke-width="3"/>
+                    <circle cx="32" cy="26" r="6" fill="#19b4ff"/><circle cx="21" cy="30" r="4.5" fill="#19b4ff"/><circle cx="43" cy="30" r="4.5" fill="#19b4ff"/>
+                    <path d="M20 46c0-7 5-11 12-11s12 4 12 11z" fill="#19b4ff"/>
+                </svg>
+                <div class="brand-name">CrowdSafe</div>
+                <div class="brand-tag">Monitor &bull; Protect &bull; Respond</div>
             </div>
 
-            <div class="crit-main-body">
-                <div class="crit-icon-giant">⚠️</div>
-                <div class="crit-message-content">
-                    <h2 class="crit-title">DANGER: VENUE OCCUPANCY EXCEEDED</h2>
-                    <p class="crit-evacuation-statement">
-                        ⚠️ CRITICAL OVERCROWDING: <span id="overcrowd-exit-num" class="crit-exit-highlight">0</span> people must exit immediately to reduce crowd density to safe levels!
-                    </p>
-                </div>
-            </div>
+            <nav class="nav">
+                <a class="nav-item active" data-tab="live" onclick="showTab('live')"><span class="nav-ico">&#9654;</span>Live Monitoring</a>
+                <a class="nav-item" data-tab="history" onclick="showTab('history')"><span class="nav-ico">&#128276;</span>Alerts<span class="nav-badge" id="nav-alert-count">0</span></a>
+                <a class="nav-item" data-tab="past" onclick="showTab('past')"><span class="nav-ico">&#128202;</span>Analytics</a>
+                <a class="nav-item" data-tab="settings" onclick="showTab('settings')"><span class="nav-ico">&#9881;</span>Settings</a>
+            </nav>
 
-            <div class="crit-stats-breakdown">
-                <div class="crit-stat-card">
-                    <span class="crit-stat-label">Current Occupancy</span>
-                    <span class="crit-stat-number" id="crit-inside-val">0</span>
-                </div>
-                <div class="crit-stat-card alert">
-                    <span class="crit-stat-label">Immediate Exits Required</span>
-                    <span class="crit-stat-number" id="crit-needed-val">0</span>
-                </div>
-                <div class="crit-stat-card">
-                    <span class="crit-stat-label">Safe Medium Limit</span>
-                    <span class="crit-stat-number" id="crit-target-val">0</span>
-                </div>
-                <div class="crit-stat-card">
-                    <span class="crit-stat-label">Maximum Venue Capacity</span>
-                    <span class="crit-stat-number" id="crit-cap-val">0</span>
-                </div>
+            <div class="side-foot"><span class="foot-ico">&#128737;</span><span>Safety First<br>Always</span></div>
+        </aside>
+
+        <!-- ================= MAIN ================= -->
+        <main class="main">
+        <!-- ===== Status banner (top of content area) ===== -->
+        <div id="status-banner" class="green" role="status" aria-live="polite">
+            <div class="sb-main">
+                <span class="sb-icon" id="sb-icon">&#10003;</span>
+                <span class="sb-label" id="zone-text">SAFE</span>
+            </div>
+            <div class="sb-vacancy" id="vacancy-msg">
+                Vacancy: <b id="vacancy-num">0</b> <span id="vacancy-word">spots</span> free
+                <span class="sb-formula">(capacity <span id="vac-cap">0</span> &minus; inside <span id="vac-inside">0</span>)</span>
             </div>
         </div>
 
-        <!-- Main Dashboard Content (shifts smoothly to make room) -->
-        <div class="dashboard-content">
-            <div id="zone-badge" class="green"><span class="zone-icon">&#10003;</span><span id="zone-text">SAFE</span></div>
-
-            <div class="cards">
-                <div class="card card-entries"><div class="label">Entries</div><div class="num" id="entry-num">0</div></div>
-                <div class="card card-exits"><div class="label">Exits</div><div class="num" id="exit-num">0</div></div>
-                <div class="card card-inside"><div class="label">People Inside</div><div class="num" id="inside-num">0</div></div>
-                <div class="card clickable card-capacity" onclick="promptChangeCapacity()" title="Click to change capacity"><div class="label">Capacity ✏️</div><div class="num" id="capacity-num">10</div></div>
-                <div class="card card-frame"><div class="label">Detected in Frame</div><div class="num" id="frame-num">0</div></div>
-            </div>
-
-        <!-- Dynamic Safety Thresholds Display -->
-        <div class="thresholds-bar">
-            <span class="threshold-pill safe"><span class="dot"></span> Safe: <span id="thresh-safe-text">&lt; 6 (0-5)</span></span>
-            <span class="threshold-pill medium"><span class="dot"></span> Medium: <span id="thresh-med-text">6 - 8</span></span>
-            <span class="threshold-pill critical"><span class="dot"></span> Critical: <span id="thresh-crit-text">&ge; 9</span></span>
-        </div>
-
-        <!-- Dashboard Action Controls -->
-        <div class="action-buttons">
-            <button class="btn capacity-btn" id="change-cap-btn" onclick="promptChangeCapacity()">⚙️ Change Capacity</button>
-            <button class="btn reset-btn" onclick="resetCounts()">Reset Counters</button>
-            <button class="btn audio-btn active" id="audio-toggle-btn" onclick="toggleAudioMute()">🔊 Audio Alarm: ON</button>
-        </div>
-
-        <div class="tabs">
-            <button class="tab-btn active" id="tab-live-btn" onclick="showTab('live')">Live View</button>
-            <button class="tab-btn" id="tab-history-btn" onclick="showTab('history')">Alert History</button>
-            <!-- PAST DATA TAB -->
-            <button class="tab-btn" id="tab-past-btn" onclick="showTab('past')">Past Data</button>
-        </div>
-
-        <div class="tab-content active" id="tab-live">
-            <canvas id="crowd-canvas" width="900" height="320"></canvas>
-            <p style="color:var(--muted); font-size:13px; margin-top:12px;">Dashed red line = venue capacity</p>
-        </div>
-
-        <div class="tab-content" id="tab-history">
-            <div id="alert-list"></div>
-        </div>
-
-        <!-- PAST DATA TAB -->
-        <div class="tab-content" id="tab-past">
-            <!-- # --- DATABASE INTEGRATION --- -->
-            <div class="cards past-summary">
-                <div class="card"><div class="label">Total Entries</div><div class="num" id="past-total-entries">0</div></div>
-                <div class="card"><div class="label">Total Exits</div><div class="num" id="past-total-exits">0</div></div>
-                <div class="card"><div class="label">Peak Occupancy</div><div class="num" id="past-peak-occupancy">0</div></div>
-                <div class="card"><div class="label">Total Events</div><div class="num" id="past-total-events">0</div></div>
-            </div>
-
-            <div class="past-chart-wrap">
-                <canvas id="hourly-canvas" width="900" height="300"></canvas>
-                <div class="past-legend">
-                    <span><span class="legend-entry"></span>Entries</span>
-                    <span><span class="legend-exit"></span>Exits</span>
+            <header class="topbar">
+                <div class="title-wrap">
+                    <h1>Dynamic Crowd Safety Management System</h1>
+                    <p class="subtitle">Real-Time Monitoring &nbsp;&bull;&nbsp; AI Powered &nbsp;&bull;&nbsp; Smart Alerts</p>
                 </div>
-            </div>
+                <div class="top-right">
+                    <span class="sys-pill"><span class="sys-dot" id="sys-dot"></span><span id="sys-text">System Online</span></span>
+                    <span class="clock"><span id="clock-time">--:--:--</span><small id="clock-date"></small></span>
+                    <a class="logout-btn" href="{{ url_for('logout') }}">Logout</a>
+                </div>
+            </header>
 
-            <div class="past-controls">
-                <label for="past-limit">Show</label>
-                <select id="past-limit">
-                    <option value="25">25</option>
-                    <option value="50" selected>50</option>
-                    <option value="100">100</option>
-                    <option value="200">200</option>
-                </select>
-                <label for="past-filter">Event</label>
-                <select id="past-filter">
-                    <option value="ALL">All</option>
-                    <option value="ENTRY">Entry</option>
-                    <option value="EXIT">Exit</option>
-                    <option value="OBJECT">Object (False Trigger)</option>
-                    <option value="TRIGGER">Trigger (Verified)</option>
-                    <option value="RESET">Reset</option>
-                </select>
-                <button type="button" id="past-refresh">Refresh</button>
-                <a href="/export.csv">Download CSV</a>
-            </div>
+            <div class="dashboard-content">
+                <!-- ---- Top stat row ---- -->
+                <section class="cards">
+                    <div class="card card-inside">
+                        <div class="card-ico ico-blue">&#128101;</div>
+                        <div class="card-body"><div class="label">Current Crowd</div><div class="num" id="inside-num">0</div></div>
+                    </div>
+                    <div class="card card-entries">
+                        <div class="card-ico ico-green">&#10145;</div>
+                        <div class="card-body"><div class="label">Total Entry</div><div class="num" id="entry-num">0</div></div>
+                    </div>
+                    <div class="card card-exits">
+                        <div class="card-ico ico-purple">&#11013;</div>
+                        <div class="card-body"><div class="label">Total Exit</div><div class="num" id="exit-num">0</div></div>
+                    </div>
+                    <div class="card card-capacity clickable" onclick="promptChangeCapacity()" title="Click to change capacity">
+                        <div class="card-ico ico-blue">&#128101;</div>
+                        <div class="card-body"><div class="label">Capacity Limit &#9999;&#65039;</div><div class="num" id="capacity-num">10</div></div>
+                    </div>
+                    <div class="card card-frame">
+                        <div class="card-ico ico-purple">&#127909;</div>
+                        <div class="card-body"><div class="label">Detected in Frame</div><div class="num" id="frame-num">0</div></div>
+                    </div>
+                </section>
 
-            <div id="past-error" role="status"></div>
-            <div class="past-table-wrap">
-                <table id="past-table">
-                    <thead><tr><th>Time</th><th>Event</th><th>People</th><th>Occupancy</th><th>Image</th><th>Trigger Type</th></tr></thead>
-                    <tbody id="past-events"></tbody>
-                </table>
+                <!-- ---- LIVE VIEW ---- -->
+                <div class="tab-content active" id="tab-live">
+                    <!-- Compact info strip -->
+                    <div class="info-strip">
+                        <div class="thresholds-bar">
+                            <span class="threshold-pill safe"><span class="dot"></span> Safe: <span id="thresh-safe-text">&lt; 6 (0-5)</span></span>
+                            <span class="threshold-pill medium"><span class="dot"></span> Medium: <span id="thresh-med-text">6 - 8</span></span>
+                            <span class="threshold-pill critical"><span class="dot"></span> Critical: <span id="thresh-crit-text">&ge; 9</span></span>
+                        </div>
+                    </div>
+
+                    <!-- Graph moved down -->
+                    <section class="panel trend-panel">
+                        <div class="panel-head"><span class="panel-ico">&#128200;</span><h3>Crowd Trend</h3>
+                            <div class="chart-legend"><span><i class="lg-line"></i>Crowd Count</span><span><i class="lg-dash"></i>Capacity Limit</span></div>
+                        </div>
+                        <canvas id="crowd-canvas" width="1200" height="320"></canvas>
+                    </section>
+                </div>
+
+                <!-- ---- ALERT HISTORY ---- -->
+                <div class="tab-content" id="tab-history">
+                    <div id="alert-list"></div>
+                </div>
+
+                <!-- ---- PAST DATA ---- -->
+                <div class="tab-content" id="tab-past">
+                    <div class="cards past-summary">
+                        <div class="card"><div class="card-body"><div class="label">Total Entries</div><div class="num" id="past-total-entries">0</div></div></div>
+                        <div class="card"><div class="card-body"><div class="label">Total Exits</div><div class="num" id="past-total-exits">0</div></div></div>
+                        <div class="card"><div class="card-body"><div class="label">Peak Occupancy</div><div class="num" id="past-peak-occupancy">0</div></div></div>
+                        <div class="card"><div class="card-body"><div class="label">Total Events</div><div class="num" id="past-total-events">0</div></div></div>
+                    </div>
+
+                    <div class="past-chart-wrap">
+                        <canvas id="hourly-canvas" width="900" height="300"></canvas>
+                        <div class="past-legend">
+                            <span><span class="legend-entry"></span>Entries</span>
+                            <span><span class="legend-exit"></span>Exits</span>
+                        </div>
+                    </div>
+
+                    <div class="past-controls">
+                        <label for="past-limit">Show</label>
+                        <select id="past-limit">
+                            <option value="25">25</option>
+                            <option value="50" selected>50</option>
+                            <option value="100">100</option>
+                            <option value="200">200</option>
+                        </select>
+                        <label for="past-filter">Event</label>
+                        <select id="past-filter">
+                            <option value="ALL">All</option>
+                            <option value="ENTRY">Entry</option>
+                            <option value="EXIT">Exit</option>
+                            <option value="OBJECT">Object (False Trigger)</option>
+                            <option value="TRIGGER">Trigger (Verified)</option>
+                            <option value="RESET">Reset</option>
+                        </select>
+                        <button type="button" id="past-refresh">Refresh</button>
+                        <a href="/export.csv">Download CSV</a>
+                    </div>
+
+                    <div id="past-error" role="status"></div>
+                    <div class="past-table-wrap">
+                        <table id="past-table">
+                            <thead><tr><th>Time</th><th>Event</th><th>People</th><th>Occupancy</th><th>Image</th><th>Trigger Type</th></tr></thead>
+                            <tbody id="past-events"></tbody>
+                        </table>
+                    </div>
+                    <p id="past-note">Images are auto-deleted after the newest 500.</p>
+                </div>
+
+                <!-- ---- SETTINGS ---- -->
+                <div class="tab-content" id="tab-settings">
+                    <section class="panel settings-panel">
+                        <div class="panel-head"><span class="panel-ico">&#9881;</span><h3>Settings</h3></div>
+                        <div class="settings-list">
+                            <div class="setting-row">
+                                <div class="setting-info"><div class="setting-title">Venue Capacity</div>
+                                    <div class="setting-desc">Maximum number of people allowed. Current: <b id="settings-cap">10</b></div></div>
+                                <button class="btn capacity-btn" id="change-cap-btn" onclick="promptChangeCapacity()">⚙️ Change Capacity</button>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info"><div class="setting-title">Reset Counters</div>
+                                    <div class="setting-desc">Set entries, exits and people inside back to zero.</div></div>
+                                <button class="btn reset-btn" onclick="resetCounts()">Reset Counters</button>
+                            </div>
+                            <div class="setting-row">
+                                <div class="setting-info"><div class="setting-title">Audio Alarm</div>
+                                    <div class="setting-desc">Sound an alarm while the zone is critical.</div></div>
+                                <button class="btn audio-btn active" id="audio-toggle-btn" onclick="toggleAudioMute()">🔊 Audio Alarm: ON</button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </div><!-- /.dashboard-content -->
+        </main>
+    </div>
+
+    <!-- Capacity dialog (replaces the browser prompt so no IP address is shown) -->
+    <div id="cap-modal" class="modal-backdrop" aria-hidden="true">
+        <div class="modal" role="dialog" aria-labelledby="cap-modal-title">
+            <h3 id="cap-modal-title">Enter Capacity</h3>
+            <p class="modal-sub">Maximum number of people allowed (positive whole number).</p>
+            <input type="number" id="cap-input" min="1" step="1" inputmode="numeric">
+            <div id="cap-error" class="modal-error"></div>
+            <div class="modal-actions">
+                <button type="button" class="link-btn" id="cap-default-btn">Use default (<span id="cap-default-val">10</span>)</button>
+                <span class="spacer"></span>
+                <button type="button" class="btn capacity-btn" id="cap-cancel-btn">Cancel</button>
+                <button type="button" class="btn reset-btn" id="cap-ok-btn">Set Capacity</button>
             </div>
-            <p id="past-note">Images are auto-deleted after the newest 500.</p>
         </div>
-        </div><!-- /.dashboard-content -->
+    </div>
 
-        <!-- Relocated Entries & Exits Fixed Bar (Active only when Critical) -->
-        <div id="critical-footer-bar" class="critical-footer-bar">
-            <div class="footer-badge-title">
-                <span class="footer-live-beacon"></span>
-                <span>CRITICAL OVERCROWDING &bull; RELOCATED LIVE COUNTERS</span>
-            </div>
-            <div class="footer-counters-group">
-                <div class="footer-counter-item active-entries">
-                    <span class="footer-counter-label">Total Entries</span>
-                    <span class="footer-counter-val blue" id="footer-entry-num">0</span>
-                </div>
-                <div class="footer-counter-item active-exits">
-                    <span class="footer-counter-label">Total Exits</span>
-                    <span class="footer-counter-val purple" id="footer-exit-num">0</span>
-                </div>
-                <div class="footer-counter-item">
-                    <span class="footer-counter-label">People Inside</span>
-                    <span class="footer-counter-val red" id="footer-inside-num">0</span>
-                </div>
-            </div>
-        </div>
-
-        <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
-    </body>
-    </html>
-    
+    <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>

@@ -1,126 +1,32 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="theme-color" content="#070d1d">
-    <title>Sign in | CrowdSense</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/login.css') }}">
+    <title>Login - CrowdSafe</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
 </head>
-<body class="login-page">
-    <main class="login-shell">
-        <section class="welcome-panel" aria-label="CrowdSense overview">
-            <div class="brand">
-                <span class="brand-mark" aria-hidden="true">
-                    <svg viewBox="0 0 48 48" fill="none">
-                        <circle cx="24" cy="12" r="6" fill="currentColor"/>
-                        <circle cx="11" cy="19" r="4.5" fill="currentColor" opacity=".8"/>
-                        <circle cx="37" cy="19" r="4.5" fill="currentColor" opacity=".8"/>
-                        <path d="M13 35v-4.5a11 11 0 0 1 22 0V35H13Z" fill="currentColor"/>
-                        <path d="M3 34v-3a8 8 0 0 1 5-7.4 8.5 8.5 0 0 0 3.1 1.1A14 14 0 0 0 8.5 31v3H3Zm42 0v-3a8 8 0 0 0-5-7.4 8.5 8.5 0 0 1-3.1 1.1A14 14 0 0 1 39.5 31v3H45Z" fill="currentColor" opacity=".8"/>
-                    </svg>
-                </span>
-                <span class="brand-name">Crowd<span>Sense</span></span>
-            </div>
-            <p class="brand-caption">MONITOR <i></i> MANAGE <i></i> ENSURE SAFETY</p>
+<body class="login-body">
+    <main class="login-card">
+        <svg class="brand-shield" viewBox="0 0 64 72" aria-hidden="true">
+            <path d="M32 3 6 13v22c0 17 11 29 26 34 15-5 26-17 26-34V13z" fill="rgba(0,160,255,.12)" stroke="#19b4ff" stroke-width="3"/>
+            <circle cx="32" cy="26" r="6" fill="#19b4ff"/><circle cx="21" cy="30" r="4.5" fill="#19b4ff"/><circle cx="43" cy="30" r="4.5" fill="#19b4ff"/>
+            <path d="M20 46c0-7 5-11 12-11s12 4 12 11z" fill="#19b4ff"/>
+        </svg>
+        <h1>CrowdSafe</h1>
+        <p class="login-sub">Sign in to the Crowd Safety Management System</p>
 
-            <div class="welcome-copy">
-                <div class="live-pill"><span></span> CROWD SAFETY, IN REAL TIME</div>
-                <h1>See the crowd.<br><span>Stay one step ahead.</span></h1>
-                <p>One clear view of occupancy, activity and safety — so your team can focus on what matters.</p>
-            </div>
+        <form class="login-form" method="post" action="{{ url_for('login') }}" autocomplete="on">
+            <label for="username">Username</label>
+            <input type="text" id="username" name="username" required autofocus autocomplete="username">
 
-            <div class="scene" aria-hidden="true">
-                <div class="scene-glow"></div>
-                <div class="scene-grid"></div>
-                <div class="venue">
-                    <div class="venue-roof"></div>
-                    <div class="venue-lights"></div>
-                    <div class="venue-structure"></div>
-                </div>
-                <svg class="crowd-art" viewBox="0 0 720 205" preserveAspectRatio="xMidYMax slice">
-                    <defs>
-                        <linearGradient id="crowdFade" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0" stop-color="#112750"/>
-                            <stop offset="1" stop-color="#071126"/>
-                        </linearGradient>
-                    </defs>
-                    <path fill="url(#crowdFade)" d="M0 205V102l16-17 19 12 13-22 23 14 17-28 25 25 13-16 21 21 17-39 24 20 17-17 21 26 21-45 24 24 17-19 25 32 17-28 24 21 20-30 20 29 20-16 19 29 19-24 21 17 20-30 23 23 19-17 17 28 24-19 20 21 17-13 18 24 20-18 17 14 21-21 21 25 16-14 20 22 18-14 19 20 16-11 20 16v89H0Z"/>
-                    <g fill="#071126">
-                        <circle cx="45" cy="143" r="14"/><path d="M24 205v-30a21 21 0 0 1 42 0v30Z"/>
-                        <circle cx="105" cy="153" r="12"/><path d="M86 205v-26a19 19 0 0 1 38 0v26Z"/>
-                        <circle cx="174" cy="137" r="16"/><path d="M149 205v-34a25 25 0 0 1 50 0v34Z"/>
-                        <circle cx="245" cy="157" r="13"/><path d="M224 205v-28a21 21 0 0 1 42 0v28Z"/>
-                        <circle cx="315" cy="141" r="15"/><path d="M291 205v-33a24 24 0 0 1 48 0v33Z"/>
-                        <circle cx="392" cy="155" r="13"/><path d="M371 205v-28a21 21 0 0 1 42 0v28Z"/>
-                        <circle cx="466" cy="139" r="16"/><path d="M441 205v-34a25 25 0 0 1 50 0v34Z"/>
-                        <circle cx="539" cy="155" r="13"/><path d="M518 205v-28a21 21 0 0 1 42 0v28Z"/>
-                        <circle cx="612" cy="140" r="16"/><path d="M587 205v-34a25 25 0 0 1 50 0v34Z"/>
-                        <circle cx="680" cy="153" r="13"/><path d="M659 205v-28a21 21 0 0 1 42 0v28Z"/>
-                    </g>
-                    <g fill="#10244a" opacity=".9">
-                        <circle cx="78" cy="175" r="10"/><path d="M62 205v-15a16 16 0 0 1 32 0v15Z"/>
-                        <circle cx="211" cy="177" r="10"/><path d="M195 205v-15a16 16 0 0 1 32 0v15Z"/>
-                        <circle cx="354" cy="177" r="10"/><path d="M338 205v-15a16 16 0 0 1 32 0v15Z"/>
-                        <circle cx="501" cy="177" r="10"/><path d="M485 205v-15a16 16 0 0 1 32 0v15Z"/>
-                        <circle cx="647" cy="177" r="10"/><path d="M631 205v-15a16 16 0 0 1 32 0v15Z"/>
-                    </g>
-                </svg>
-            </div>
+            <label for="password">Password</label>
+            <input type="password" id="password" name="password" required autocomplete="current-password">
 
-            <div class="feature-strip">
-                <div><span class="feature-icon">▥</span><span>Real-time monitoring</span></div>
-                <div><span class="feature-icon">◆</span><span>Instant alerts</span></div>
-                <div><span class="feature-icon">◎</span><span>Safer spaces</span></div>
-            </div>
-        </section>
+            {% if error %}<div class="login-error" role="alert">{{ error }}</div>{% endif %}
 
-        <section class="form-panel" aria-labelledby="login-title">
-            <div class="form-card">
-                <div class="form-eyebrow"><span class="shield-icon" aria-hidden="true">✓</span> SECURE ACCESS</div>
-                <h2 id="login-title">Welcome <span>back</span></h2>
-                <p class="form-intro">Sign in to access your CrowdSense dashboard.</p>
-
-                {% if error %}
-                <div class="login-error" role="alert">
-                    <span class="error-icon" aria-hidden="true">!</span>
-                    <span>{{ error }}</span>
-                </div>
-                {% endif %}
-
-                <form method="post" action="{{ url_for('login') }}" class="login-form">
-                    <label for="username">Username</label>
-                    <div class="input-wrap">
-                        <span class="input-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/></svg>
-                        </span>
-                        <input id="username" name="username" type="text" placeholder="Enter your username"
-                               value="{{ username }}" autocomplete="username" required autofocus>
-                    </div>
-
-                    <label for="password">Password</label>
-                    <div class="input-wrap">
-                        <span class="input-icon" aria-hidden="true">
-                            <svg viewBox="0 0 24 24"><rect x="5" y="10" width="14" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/><path d="M12 14v3"/></svg>
-                        </span>
-                        <input id="password" name="password" type="password" placeholder="Enter your password"
-                               autocomplete="current-password" required>
-                        <button class="password-toggle" type="button" aria-label="Show password" aria-pressed="false">
-                            <svg viewBox="0 0 24 24"><path d="M2.5 12s3.3-6 9.5-6 9.5 6 9.5 6-3.3 6-9.5 6-9.5-6-9.5-6Z"/><circle cx="12" cy="12" r="2.5"/></svg>
-                        </button>
-                    </div>
-
-                    <button class="sign-in-button" type="submit">
-                        <span>Sign in to dashboard</span><span class="button-arrow" aria-hidden="true">→</span>
-                    </button>
-                </form>
-
-                <div class="form-divider"><span></span><i>YOUR VENUE, AT A GLANCE</i><span></span></div>
-                <p class="security-note"><span aria-hidden="true">●</span> Protected access for your safety team</p>
-            </div>
-            <p class="copyright">© CrowdSense <span>·</span> Crowd safety monitoring</p>
-        </section>
+            <button type="submit" class="btn login-submit">Login</button>
+        </form>
     </main>
-    <script src="{{ url_for('static', filename='js/login.js') }}" defer></script>
 </body>
 </html>
