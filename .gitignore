@@ -1,0 +1,25 @@
+# Generated images
+static/captures/
+processed_images/
+
+# Local database and logs
+crowd_system.db
+crowd_system.db-wal
+crowd_system.db-shm
+*.log
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+.env
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Model weights
+*.pt

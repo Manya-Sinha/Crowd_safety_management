@@ -1,0 +1,173 @@
+
+    <html>
+    <head>
+        <title>Dynamic Safety Zone Monitoring System</title>
+        <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    </head>
+    <body>
+        <div id="critical-overlay"></div>
+        <form class="dashboard-session" method="post" action="{{ url_for('logout') }}">
+            <span>Signed in</span>
+            <button type="submit">Sign out</button>
+        </form>
+        <h1>Dynamic Safety Zone Monitoring System</h1>
+        <p class="subtitle">Live view - updates automatically, no refresh needed</p>
+
+        <!-- Full-Impact Critical Warning Overlay/Banner -->
+        <div id="critical-alert-box">
+            <div class="crit-header-row">
+                <div class="crit-emergency-tag">
+                    <span class="crit-tag-dot"></span>
+                    <span>🚨 CRITICAL OVERCROWDING EMERGENCY</span>
+                </div>
+                <div class="crit-action-badge">EVACUATION LEVEL: IMMEDIATE ACTION REQUIRED</div>
+            </div>
+
+            <div class="crit-main-body">
+                <div class="crit-icon-giant">⚠️</div>
+                <div class="crit-message-content">
+                    <h2 class="crit-title">DANGER: VENUE OCCUPANCY EXCEEDED</h2>
+                    <p class="crit-evacuation-statement">
+                        ⚠️ CRITICAL OVERCROWDING: <span id="overcrowd-exit-num" class="crit-exit-highlight">0</span> people must exit immediately to reduce crowd density to safe levels!
+                    </p>
+                </div>
+            </div>
+
+            <div class="crit-stats-breakdown">
+                <div class="crit-stat-card">
+                    <span class="crit-stat-label">Current Occupancy</span>
+                    <span class="crit-stat-number" id="crit-inside-val">0</span>
+                </div>
+                <div class="crit-stat-card alert">
+                    <span class="crit-stat-label">Immediate Exits Required</span>
+                    <span class="crit-stat-number" id="crit-needed-val">0</span>
+                </div>
+                <div class="crit-stat-card">
+                    <span class="crit-stat-label">Safe Medium Limit</span>
+                    <span class="crit-stat-number" id="crit-target-val">0</span>
+                </div>
+                <div class="crit-stat-card">
+                    <span class="crit-stat-label">Maximum Venue Capacity</span>
+                    <span class="crit-stat-number" id="crit-cap-val">0</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Dashboard Content (shifts smoothly to make room) -->
+        <div class="dashboard-content">
+            <div id="zone-badge" class="green"><span class="zone-icon">&#10003;</span><span id="zone-text">SAFE</span></div>
+
+            <div class="cards">
+                <div class="card card-entries"><div class="label">Entries</div><div class="num" id="entry-num">0</div></div>
+                <div class="card card-exits"><div class="label">Exits</div><div class="num" id="exit-num">0</div></div>
+                <div class="card card-inside"><div class="label">People Inside</div><div class="num" id="inside-num">0</div></div>
+                <div class="card clickable card-capacity" onclick="promptChangeCapacity()" title="Click to change capacity"><div class="label">Capacity ✏️</div><div class="num" id="capacity-num">10</div></div>
+                <div class="card card-frame"><div class="label">Detected in Frame</div><div class="num" id="frame-num">0</div></div>
+            </div>
+
+        <!-- Dynamic Safety Thresholds Display -->
+        <div class="thresholds-bar">
+            <span class="threshold-pill safe"><span class="dot"></span> Safe: <span id="thresh-safe-text">&lt; 6 (0-5)</span></span>
+            <span class="threshold-pill medium"><span class="dot"></span> Medium: <span id="thresh-med-text">6 - 8</span></span>
+            <span class="threshold-pill critical"><span class="dot"></span> Critical: <span id="thresh-crit-text">&ge; 9</span></span>
+        </div>
+
+        <!-- Dashboard Action Controls -->
+        <div class="action-buttons">
+            <button class="btn capacity-btn" id="change-cap-btn" onclick="promptChangeCapacity()">⚙️ Change Capacity</button>
+            <button class="btn reset-btn" onclick="resetCounts()">Reset Counters</button>
+            <button class="btn audio-btn active" id="audio-toggle-btn" onclick="toggleAudioMute()">🔊 Audio Alarm: ON</button>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" id="tab-live-btn" onclick="showTab('live')">Live View</button>
+            <button class="tab-btn" id="tab-history-btn" onclick="showTab('history')">Alert History</button>
+            <!-- PAST DATA TAB -->
+            <button class="tab-btn" id="tab-past-btn" onclick="showTab('past')">Past Data</button>
+        </div>
+
+        <div class="tab-content active" id="tab-live">
+            <canvas id="crowd-canvas" width="900" height="320"></canvas>
+            <p style="color:var(--muted); font-size:13px; margin-top:12px;">Dashed red line = venue capacity</p>
+        </div>
+
+        <div class="tab-content" id="tab-history">
+            <div id="alert-list"></div>
+        </div>
+
+        <!-- PAST DATA TAB -->
+        <div class="tab-content" id="tab-past">
+            <!-- # --- DATABASE INTEGRATION --- -->
+            <div class="cards past-summary">
+                <div class="card"><div class="label">Total Entries</div><div class="num" id="past-total-entries">0</div></div>
+                <div class="card"><div class="label">Total Exits</div><div class="num" id="past-total-exits">0</div></div>
+                <div class="card"><div class="label">Peak Occupancy</div><div class="num" id="past-peak-occupancy">0</div></div>
+                <div class="card"><div class="label">Total Events</div><div class="num" id="past-total-events">0</div></div>
+            </div>
+
+            <div class="past-chart-wrap">
+                <canvas id="hourly-canvas" width="900" height="300"></canvas>
+                <div class="past-legend">
+                    <span><span class="legend-entry"></span>Entries</span>
+                    <span><span class="legend-exit"></span>Exits</span>
+                </div>
+            </div>
+
+            <div class="past-controls">
+                <label for="past-limit">Show</label>
+                <select id="past-limit">
+                    <option value="25">25</option>
+                    <option value="50" selected>50</option>
+                    <option value="100">100</option>
+                    <option value="200">200</option>
+                </select>
+                <label for="past-filter">Event</label>
+                <select id="past-filter">
+                    <option value="ALL">All</option>
+                    <option value="ENTRY">Entry</option>
+                    <option value="EXIT">Exit</option>
+                    <option value="OBJECT">Object (False Trigger)</option>
+                    <option value="TRIGGER">Trigger (Verified)</option>
+                    <option value="RESET">Reset</option>
+                </select>
+                <button type="button" id="past-refresh">Refresh</button>
+                <a href="/export.csv">Download CSV</a>
+            </div>
+
+            <div id="past-error" role="status"></div>
+            <div class="past-table-wrap">
+                <table id="past-table">
+                    <thead><tr><th>Time</th><th>Event</th><th>People</th><th>Occupancy</th><th>Image</th><th>Trigger Type</th></tr></thead>
+                    <tbody id="past-events"></tbody>
+                </table>
+            </div>
+            <p id="past-note">Images are auto-deleted after the newest 500.</p>
+        </div>
+        </div><!-- /.dashboard-content -->
+
+        <!-- Relocated Entries & Exits Fixed Bar (Active only when Critical) -->
+        <div id="critical-footer-bar" class="critical-footer-bar">
+            <div class="footer-badge-title">
+                <span class="footer-live-beacon"></span>
+                <span>CRITICAL OVERCROWDING &bull; RELOCATED LIVE COUNTERS</span>
+            </div>
+            <div class="footer-counters-group">
+                <div class="footer-counter-item active-entries">
+                    <span class="footer-counter-label">Total Entries</span>
+                    <span class="footer-counter-val blue" id="footer-entry-num">0</span>
+                </div>
+                <div class="footer-counter-item active-exits">
+                    <span class="footer-counter-label">Total Exits</span>
+                    <span class="footer-counter-val purple" id="footer-exit-num">0</span>
+                </div>
+                <div class="footer-counter-item">
+                    <span class="footer-counter-label">People Inside</span>
+                    <span class="footer-counter-val red" id="footer-inside-num">0</span>
+                </div>
+            </div>
+        </div>
+
+        <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+    </body>
+    </html>
+    
