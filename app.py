@@ -147,6 +147,7 @@ exit_count = 0
 latest_people_in_frame = 0
 latest_image_name = None
 latest_heatmap_name = None
+verified_people_count = 0
 # --- DATABASE INTEGRATION ---
 last_verify_image_name = None
 recent_human_confidences = deque(maxlen=CONFIRM_STREAK_REQUIRED)
@@ -339,8 +340,9 @@ def verify_frame():
     """Called once per beam-break event. Verifies human-or-nature and 
     automatically registers entry/exit if a direction query parameter is provided."""
     global latest_image_name, latest_heatmap_name, latest_people_in_frame
-    global last_verify_image_name, entry_count, exit_count
+    global last_verify_image_name, entry_count, exit_count, verified_people_count
 
+    verified_people_count = 0
     # Check if a direction was passed in the URL (e.g. /verify_frame?direction=entry)
     direction = request.args.get("direction", "").lower()
 
@@ -350,6 +352,7 @@ def verify_frame():
 
     img, annotated, boxes, is_human = run_detection(img)
     latest_people_in_frame = len(boxes)
+    verified_people_count = len(boxes) if is_human else 0
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"verify_{timestamp}.jpg"
@@ -376,17 +379,31 @@ def verify_frame():
     count_updated = False
     if is_human and AUTO_COUNT_FROM_VERIFY:
         if direction in ["entry", "in", "1"]:
-            entry_count += 1
-            safe_log_event("ENTRY", 1, people_inside_count(), filename, "Human")
-            add_alert(f"Entry recorded - {people_inside_count()} now inside", "entry")
+            people_crossed = len(boxes)
+            entry_count += people_crossed
+            safe_log_event("ENTRY", people_crossed, people_inside_count(), filename, "Human")
+            people_label = "person" if people_crossed == 1 else "people"
+            add_alert(
+                f"Entry recorded: {people_crossed} {people_label} "
+                f"({people_inside_count()} now inside)",
+                "entry",
+            )
             check_zone_transition()
+            verified_people_count = 0
             count_updated = True
         elif direction in ["exit", "out", "2"]:
-            if people_inside_count() > 0:
-                exit_count += 1
-                safe_log_event("EXIT", 1, people_inside_count(), filename, "Human")
-                add_alert(f"Exit recorded - {people_inside_count()} now inside", "exit")
+            people_crossed = len(boxes)
+            if people_crossed > 0:
+                exit_count += people_crossed
+                safe_log_event("EXIT", people_crossed, people_inside_count(), filename, "Human")
+                people_label = "person" if people_crossed == 1 else "people"
+                add_alert(
+                    f"Exit recorded: {people_crossed} {people_label} "
+                    f"({people_inside_count()} now inside)",
+                    "exit",
+                )
                 check_zone_transition()
+                verified_people_count = 0
                 count_updated = True
     elif not is_human:
         add_alert(f"Non-human trigger ({trigger_type}) - {people_inside_count()} inside", "orange")
@@ -434,26 +451,64 @@ def periodic_frame():
 
 @app.route("/entry", methods=["GET"])
 def entry():
-    global entry_count
-    entry_count += 1
-    # TODO: pass n people once multi-person counting exists
+    global entry_count, verified_people_count
+    people_crossed = verified_people_count
+    verified_people_count = 0
+    if people_crossed == 0:
+        return jsonify({
+            "status": "ignored",
+            "message": "No verified people to count",
+            "entry_count": entry_count,
+            "people_inside": people_inside_count(),
+        })
+
+    entry_count += people_crossed
     # --- DATABASE INTEGRATION ---
-    safe_log_event("ENTRY", 1, people_inside_count(), last_verify_image_name, "Human")
-    add_alert(f"Entry recorded - {people_inside_count()} now inside", "entry")
+    safe_log_event("ENTRY", people_crossed, people_inside_count(), last_verify_image_name, "Human")
+    people_label = "person" if people_crossed == 1 else "people"
+    add_alert(
+        f"Entry recorded: {people_crossed} {people_label} "
+        f"({people_inside_count()} now inside)",
+        "entry",
+    )
     check_zone_transition()
-    return jsonify({"status": "ok", "entry_count": entry_count})
+    return jsonify({
+        "status": "ok",
+        "entry_count": entry_count,
+        "people_crossed": people_crossed,
+        "people_inside": people_inside_count(),
+    })
 
 
 @app.route("/exit", methods=["GET"])
 def exit_route():
-    global exit_count
-    exit_count += 1
-    # TODO: pass n people once multi-person counting exists
+    global exit_count, verified_people_count
+    people_crossed = verified_people_count
+    verified_people_count = 0
+    if people_crossed == 0:
+        return jsonify({
+            "status": "ignored",
+            "message": "No verified people to count",
+            "exit_count": exit_count,
+            "people_inside": people_inside_count(),
+        })
+
+    exit_count += people_crossed
     # --- DATABASE INTEGRATION ---
-    safe_log_event("EXIT", 1, people_inside_count(), last_verify_image_name, "Human")
-    add_alert(f"Exit recorded - {people_inside_count()} now inside", "exit")
+    safe_log_event("EXIT", people_crossed, people_inside_count(), last_verify_image_name, "Human")
+    people_label = "person" if people_crossed == 1 else "people"
+    add_alert(
+        f"Exit recorded: {people_crossed} {people_label} "
+        f"({people_inside_count()} now inside)",
+        "exit",
+    )
     check_zone_transition()
-    return jsonify({"status": "ok", "exit_count": exit_count})
+    return jsonify({
+        "status": "ok",
+        "exit_count": exit_count,
+        "people_crossed": people_crossed,
+        "people_inside": people_inside_count(),
+    })
 
 
 @app.route("/reset", methods=["GET", "POST"])
