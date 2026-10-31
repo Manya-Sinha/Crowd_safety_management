@@ -107,6 +107,11 @@ ORANGE_THRESHOLD = 0.6   # 60% of capacity -> orange
 RED_THRESHOLD = 0.9      # 90% of capacity -> red
 CRITICAL_THRESHOLD = 1.0 # 100%+ -> red AND the flash alert
 
+# The ESP32 firmware already calls /entry and /exit after /verify_frame. Counting a
+# second time inside /verify_frame (via ?direction=) would double count, so it is OFF.
+# Turn it on only if your firmware sends ?direction=entry|exit and does NOT call /entry,/exit.
+AUTO_COUNT_FROM_VERIFY = False
+
 # ---- In-memory state ----
 entry_count = 0
 exit_count = 0
@@ -195,27 +200,31 @@ if entry_count > 0:
     add_alert(f"Server restarted - restored {entry_count} people inside", "info")
 
 
-def run_detection(img):
-    """Select the most detectable orientation and return its annotated frame and boxes."""
+def run_detection(img, search_rotations=True):
+    """Run person detection and return (img, annotated, boxes, is_human).
+
+    SPEED FIX: the previous version always ran YOLO on 4 rotated copies of every
+    frame (about 4x slower). The ESP32 waits for the /verify_frame reply with a
+    time limit, so a slow reply made it give up and never call /entry or /exit.
+    Now only the last orientation that worked is tried first (one pass, same
+    speed as the original). The other 3 rotations are tried only if that pass
+    finds nobody, and only when search_rotations is True.
+    """
     global selected_orientation_index
 
-    orientations = [
-        img,
-        cv2.rotate(img, cv2.ROTATE_90_CLOCKWISE),
-        cv2.rotate(img, cv2.ROTATE_180),
-        cv2.rotate(img, cv2.ROTATE_90_COUNTERCLOCKWISE),
-    ]
-    results = list(model.predict(
-        orientations,
-        classes=[PERSON_CLASS_ID],
-        conf=CONF_THRESHOLD,
-        imgsz=640,
-        verbose=False,
-    ))
-    if len(results) != len(orientations):
-        raise RuntimeError(
-            f"YOLO returned {len(results)} results for {len(orientations)} image orientations"
-        )
+    rotations = [None, cv2.ROTATE_90_CLOCKWISE, cv2.ROTATE_180, cv2.ROTATE_90_COUNTERCLOCKWISE]
+
+    def orient(index):
+        return img if rotations[index] is None else cv2.rotate(img, rotations[index])
+
+    def predict(frames):
+        return list(model.predict(
+            frames,
+            classes=[PERSON_CLASS_ID],
+            conf=CONF_THRESHOLD,
+            imgsz=640,
+            verbose=False,
+        ))
 
     def detection_quality(result):
         if result.boxes is None:
@@ -225,19 +234,31 @@ def run_detection(img):
         confidence_sum = float(boxes.conf.sum().item()) if boxes.conf is not None else 0.0
         return count, confidence_sum
 
-    # Prefer more person detections, then stronger combined confidence. Ties keep
-    # the earlier orientation, so a frame with no detections stays unrotated.
-    best_index = max(
-        range(len(results)),
-        key=lambda index: (*detection_quality(results[index]), -index),
-    )
-    if detection_quality(results[best_index])[0]:
-        selected_orientation_index = best_index
-    else:
-        best_index = selected_orientation_index
+    # Pass 1: the orientation that worked last time (starts as the normal, upright one).
+    best_index = selected_orientation_index
+    best_img = orient(best_index)
+    best_result = predict([best_img])[0]
 
-    img = orientations[best_index]
-    best_result = results[best_index]
+    # Pass 2 (only if nobody was found): try the remaining rotations in one batch.
+    if search_rotations and detection_quality(best_result)[0] == 0:
+        other_indexes = [i for i in range(len(rotations)) if i != best_index]
+        other_frames = [orient(i) for i in other_indexes]
+        other_results = predict(other_frames)
+        if len(other_results) != len(other_frames):
+            raise RuntimeError(
+                f"YOLO returned {len(other_results)} results for {len(other_frames)} image orientations"
+            )
+        winner = max(
+            range(len(other_results)),
+            key=lambda k: (*detection_quality(other_results[k]), -k),
+        )
+        if detection_quality(other_results[winner])[0]:
+            best_index = other_indexes[winner]
+            best_img = other_frames[winner]
+            best_result = other_results[winner]
+            selected_orientation_index = best_index
+
+    img = best_img
     boxes = (
         best_result.boxes.xyxy.cpu().numpy().tolist()
         if best_result.boxes is not None
@@ -247,7 +268,7 @@ def run_detection(img):
     detected_this_frame = bool(boxes)
 
     recent_human_confidences.append(detected_this_frame)
-    is_human_confirmed = detected_this_frame  # single-frame result, used for /verify_frame
+    is_human_confirmed = detected_this_frame   # single-frame result, used for /verify_frame
     return img, annotated, boxes, is_human_confirmed
 
 
@@ -286,10 +307,13 @@ def decode_upload():
 
 @app.route("/verify_frame", methods=["POST"])
 def verify_frame():
-    """Called once per beam-break event (with the flash frame). Confirms
-    human-or-not so the ESP32 knows whether to count that crossing."""
+    """Called once per beam-break event. Verifies human-or-nature and 
+    automatically registers entry/exit if a direction query parameter is provided."""
     global latest_image_name, latest_heatmap_name, latest_people_in_frame
-    global last_verify_image_name
+    global last_verify_image_name, entry_count, exit_count
+
+    # Check if a direction was passed in the URL (e.g. /verify_frame?direction=entry)
+    direction = request.args.get("direction", "").lower()
 
     img = decode_upload()
     if img is None:
@@ -300,10 +324,10 @@ def verify_frame():
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     filename = f"verify_{timestamp}.jpg"
-    # Save every captured snapshot frame locally to static/captures/ and SAVE_DIR
+    
     cv2.imwrite(os.path.join(CAPTURES_DIR, filename), annotated)
     cv2.imwrite(os.path.join(SAVE_DIR, filename), annotated)
-    # --- DATABASE INTEGRATION ---
+    
     last_verify_image_name = filename
     latest_image_name = filename
 
@@ -313,14 +337,29 @@ def verify_frame():
     cv2.imwrite(os.path.join(CAPTURES_DIR, heatmap_name), heatmap)
     latest_heatmap_name = heatmap_name
 
-    # Determine classification for audit logging
     trigger_type = "Human" if is_human else "Object/False Trigger"
     verify_direction = "TRIGGER" if is_human else "OBJECT"
 
-    # Log EVERY captured snapshot frame into SQLite events table for audit trail
+    # Log snapshot into SQLite audit trail
     safe_log_event(verify_direction, len(boxes), people_inside_count(), filename, trigger_type)
 
-    if not is_human:
+    # AUTOMATIC COUNT REGISTRATION IF HUMAN AND DIRECTION IS PROVIDED
+    count_updated = False
+    if is_human and AUTO_COUNT_FROM_VERIFY:
+        if direction in ["entry", "in", "1"]:
+            entry_count += 1
+            safe_log_event("ENTRY", 1, people_inside_count(), filename, "Human")
+            add_alert(f"Entry recorded - {people_inside_count()} now inside", "entry")
+            check_zone_transition()
+            count_updated = True
+        elif direction in ["exit", "out", "2"]:
+            if people_inside_count() > 0:
+                exit_count += 1
+                safe_log_event("EXIT", 1, people_inside_count(), filename, "Human")
+                add_alert(f"Exit recorded - {people_inside_count()} now inside", "exit")
+                check_zone_transition()
+                count_updated = True
+    elif not is_human:
         add_alert(f"Non-human trigger ({trigger_type}) - {people_inside_count()} inside", "orange")
 
     cleanup_old_images()
@@ -329,7 +368,10 @@ def verify_frame():
         "is_human": bool(is_human),
         "people_detected": len(boxes),
         "trigger_type": trigger_type,
-        "image_filename": filename
+        "image_filename": filename,
+        "entry_count": entry_count,
+        "exit_count": exit_count,
+        "people_inside": people_inside_count()
     })
 
 
@@ -342,7 +384,7 @@ def periodic_frame():
     if img is None:
         return jsonify({"error": "could not decode image"}), 400
 
-    img, annotated, boxes, _ = run_detection(img)
+    img, annotated, boxes, _ = run_detection(img, search_rotations=False)
     latest_people_in_frame = len(boxes)
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
@@ -376,14 +418,6 @@ def entry():
 @app.route("/exit", methods=["GET"])
 def exit_route():
     global exit_count
-    if people_inside_count() == 0:
-        return jsonify({
-            "status": "ignored",
-            "message": "Exit ignored because nobody is inside",
-            "exit_count": exit_count,
-            "people_inside": 0,
-        })
-
     exit_count += 1
     # TODO: pass n people once multi-person counting exists
     # --- DATABASE INTEGRATION ---
