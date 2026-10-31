@@ -115,6 +115,8 @@
             }
 
             function updateAudioButtonUI() {
+                const csBtn = document.getElementById('cs-mute-btn');
+                if (csBtn) csBtn.innerHTML = isAudioMuted ? '&#128263; Alarm muted (tap to unmute)' : '&#128266; Mute alarm';
                 const btn = document.getElementById('audio-toggle-btn');
                 if (!btn) return;
                 if (isAudioMuted) {
@@ -136,38 +138,56 @@
                 return (serverCap && serverCap > 0) ? serverCap : 10;
             }
 
-            function promptChangeCapacity() {
-                initAudio();
+            // ---- Capacity dialog (custom modal: no browser "IP says" prompt) ----
+            function openCapModal() {
+                const modal = document.getElementById('cap-modal');
+                const input = document.getElementById('cap-input');
                 const serverCap = lastStatusData ? lastStatusData.max_capacity : 10;
-                const currentCap = getEffectiveCapacity(serverCap);
-                const input = prompt(
-                    "Enter new maximum capacity number (positive integer):\n(Enter 'reset' to revert to server default of " + serverCap + ")",
-                    currentCap
-                );
-                if (input === null) return;
-
-                const trimmed = input.trim();
-                if (trimmed.toLowerCase() === 'reset') {
+                document.getElementById('cap-default-val').textContent = serverCap;
+                document.getElementById('cap-error').textContent = '';
+                input.value = getEffectiveCapacity(serverCap);
+                modal.classList.add('open');
+                modal.setAttribute('aria-hidden', 'false');
+                setTimeout(() => { input.focus(); input.select(); }, 30);
+            }
+            function closeCapModal() {
+                const modal = document.getElementById('cap-modal');
+                modal.classList.remove('open');
+                modal.setAttribute('aria-hidden', 'true');
+            }
+            function applyCapacity(value) {
+                // value === null -> revert to server default
+                if (value === null) {
                     customCapacity = null;
                     try { localStorage.removeItem('crowd_custom_capacity'); } catch (e) {}
-                    if (lastStatusData) renderDashboard(lastStatusData);
+                } else {
+                    customCapacity = value;
+                    try { localStorage.setItem('crowd_custom_capacity', value); } catch (e) {}
+                }
+                if (lastStatusData) renderDashboard(lastStatusData);
+            }
+            function submitCapModal() {
+                const raw = document.getElementById('cap-input').value.trim();
+                const parsed = parseInt(raw, 10);
+                if (raw === '' || isNaN(parsed) || parsed <= 0 || String(parsed) !== raw) {
+                    document.getElementById('cap-error').textContent = 'Please enter a valid positive whole number.';
                     return;
                 }
+                applyCapacity(parsed);
+                closeCapModal();
+            }
+            document.getElementById('cap-ok-btn').addEventListener('click', submitCapModal);
+            document.getElementById('cap-cancel-btn').addEventListener('click', closeCapModal);
+            document.getElementById('cap-default-btn').addEventListener('click', () => { applyCapacity(null); closeCapModal(); });
+            document.getElementById('cap-modal').addEventListener('click', e => { if (e.target.id === 'cap-modal') closeCapModal(); });
+            document.getElementById('cap-input').addEventListener('keydown', e => {
+                if (e.key === 'Enter') submitCapModal();
+            });
+            document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCapModal(); });
 
-                const parsed = parseInt(trimmed, 10);
-                if (isNaN(parsed) || parsed <= 0) {
-                    alert("Please enter a valid positive number for capacity.");
-                    return;
-                }
-
-                customCapacity = parsed;
-                try {
-                    localStorage.setItem('crowd_custom_capacity', parsed);
-                } catch (e) {}
-
-                if (lastStatusData) {
-                    renderDashboard(lastStatusData);
-                }
+            function promptChangeCapacity() {
+                initAudio();
+                openCapModal();
             }
 
             function updateThresholdsUI(capacity) {
@@ -201,14 +221,20 @@
                 document.getElementById('tab-history').classList.toggle('active', name === 'history');
                 // # --- DATABASE INTEGRATION ---
                 document.getElementById('tab-past').classList.toggle('active', name === 'past');
-                document.getElementById('tab-live-btn').classList.toggle('active', name === 'live');
-                document.getElementById('tab-history-btn').classList.toggle('active', name === 'history');
-                document.getElementById('tab-past-btn').classList.toggle('active', name === 'past');
+                document.getElementById('tab-settings').classList.toggle('active', name === 'settings');
+                document.querySelectorAll('.nav-item[data-tab]').forEach(el => {
+                    el.classList.remove('active');
+                });
+                const navTarget = document.querySelector('.nav-item[data-tab="' + name + '"]');
+                if (navTarget) navTarget.classList.add('active');
                 if (name === 'past') fetchPastData();
             }
 
             function resetCounts() {
-                fetch('/reset').then(refresh);
+                fetch('/reset').then(r => {
+                    if (r.status === 401) { window.location.href = '/login'; return; }
+                    refresh();
+                });
             }
 
             function renderAlerts(alerts) {
@@ -216,6 +242,23 @@
                 list.innerHTML = alerts.map(a =>
                     `<div class="alert-row ${a.type}"><span class="time">${a.time}</span>${a.message}</div>`
                 ).join('') || '<p style="color:#8b8fa3;">No alerts yet.</p>';
+
+                // Compact "Alerts & Notifications" panel on the live view + sidebar badge
+                const recent = document.getElementById('recent-alerts');
+                if (recent) {
+                    recent.innerHTML = alerts.slice(0, 3).map(a => {
+                        const icon = (a.type === 'red' || a.type === 'critical') ? '&#9888;&#65039;'
+                                   : a.type === 'orange' ? '&#9888;&#65039;'
+                                   : a.type === 'green' ? '&#9989;' : '&#8505;&#65039;';
+                        return `<div class="ra-row ${a.type}"><span class="ra-ico">${icon}</span>` +
+                               `<div class="ra-text">${a.message}<span class="ra-time">${a.time}</span></div></div>`;
+                    }).join('') || '<p class="empty">No alerts yet.</p>';
+                }
+                const navBadge = document.getElementById('nav-alert-count');
+                if (navBadge) {
+                    navBadge.textContent = alerts.length > 99 ? '99+' : alerts.length;
+                    navBadge.style.display = alerts.length ? 'inline-flex' : 'none';
+                }
             }
 
             function drawGraph(history, maxCapacity, zoneColor) {
@@ -229,7 +272,7 @@
                 ctx.clearRect(0, 0, W, H);
 
                 if (!history || history.length === 0) {
-                    ctx.fillStyle = '#8b8fa3';
+                    ctx.fillStyle = '#8da2c8';
                     ctx.font = '16px sans-serif';
                     ctx.textAlign = 'center';
                     ctx.fillText('Waiting for data...', W / 2, H / 2);
@@ -237,12 +280,12 @@
                 }
 
                 const yMax = Math.max(maxCapacity, ...history.map(p => p.value)) + 1;
-                const colors = { green: '#2ecc71', orange: '#f5a623', red: '#e74c3c' };
-                const lineColor = colors[zoneColor] || '#5b8cff';
+                const colors = { green: '#19b4ff', orange: '#f5b323', red: '#ff4d4d' };
+                const lineColor = colors[zoneColor] || '#19b4ff';
 
                 // gridlines + y-axis labels
-                ctx.strokeStyle = '#262a3a';
-                ctx.fillStyle = '#8b8fa3';
+                ctx.strokeStyle = 'rgba(80,130,220,0.22)';
+                ctx.fillStyle = '#b6c8ee';
                 ctx.font = '11px sans-serif';
                 ctx.textAlign = 'right';
                 const ySteps = 5;
@@ -260,7 +303,8 @@
                 const capY = padT + plotH - (maxCapacity / yMax) * plotH;
                 ctx.save();
                 ctx.setLineDash([5, 4]);
-                ctx.strokeStyle = '#e74c3c';
+                ctx.strokeStyle = '#ff4d4d';
+                ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.moveTo(padL, capY);
                 ctx.lineTo(W - padR, capY);
@@ -277,13 +321,19 @@
                 });
                 ctx.strokeStyle = lineColor;
                 ctx.lineWidth = 2.5;
+                ctx.shadowColor = lineColor;
+                ctx.shadowBlur = 10;
                 ctx.stroke();
+                ctx.shadowBlur = 0;
 
-                // filled area under the line
+                // filled area under the line (soft gradient)
                 ctx.lineTo(padL + (history.length - 1) * stepX, padT + plotH);
                 ctx.lineTo(padL, padT + plotH);
                 ctx.closePath();
-                ctx.fillStyle = lineColor + '22';
+                const areaGrad = ctx.createLinearGradient(0, padT, 0, padT + plotH);
+                areaGrad.addColorStop(0, lineColor + '55');
+                areaGrad.addColorStop(1, lineColor + '05');
+                ctx.fillStyle = areaGrad;
                 ctx.fill();
 
                 // highlight the latest point
@@ -291,12 +341,31 @@
                 const lastX = padL + (history.length - 1) * stepX;
                 const lastY = padT + plotH - (lastPoint.value / yMax) * plotH;
                 ctx.beginPath();
-                ctx.arc(lastX, lastY, 4, 0, Math.PI * 2);
-                ctx.fillStyle = lineColor;
+                ctx.arc(lastX, lastY, 6, 0, Math.PI * 2);
+                ctx.fillStyle = '#ffffff';
+                ctx.shadowColor = lineColor;
+                ctx.shadowBlur = 12;
                 ctx.fill();
+                ctx.shadowBlur = 0;
+                ctx.lineWidth = 3;
+                ctx.strokeStyle = lineColor;
+                ctx.stroke();
+
+                // value tag above the latest point
+                const tag = String(lastPoint.value);
+                ctx.font = 'bold 13px sans-serif';
+                const tagW = ctx.measureText(tag).width + 16;
+                const tagX = Math.min(lastX - tagW / 2, W - padR - tagW);
+                const tagY = Math.max(lastY - 34, 2);
+                ctx.fillStyle = lineColor;
+                ctx.fillRect(tagX, tagY, tagW, 22);
+                ctx.fillStyle = '#ffffff';
+                ctx.textAlign = 'center';
+                ctx.fillText(tag, tagX + tagW / 2, tagY + 16);
+                ctx.font = '11px sans-serif';
 
                 // x-axis time labels (first, middle, last)
-                ctx.fillStyle = '#8b8fa3';
+                ctx.fillStyle = '#b6c8ee';
                 ctx.textAlign = 'left';
                 ctx.fillText(history[0].time, padL, H - 8);
                 ctx.textAlign = 'center';
@@ -330,8 +399,8 @@
                     yMax = Math.max(yMax, Number(item.entries) || 0, Number(item.exits) || 0);
                 });
                 yMax = Math.ceil(yMax * 1.15);
-                ctx.strokeStyle = '#262a3a';
-                ctx.fillStyle = '#8b8fa3';
+                ctx.strokeStyle = 'rgba(80,130,220,0.22)';
+                ctx.fillStyle = '#b6c8ee';
                 ctx.font = '11px sans-serif';
                 ctx.textAlign = 'right';
                 for (let i = 0; i <= 4; i++) {
@@ -488,53 +557,54 @@
                 document.getElementById('exit-num').textContent = data.exit_count;
                 document.getElementById('inside-num').textContent = peopleInside;
                 document.getElementById('capacity-num').textContent = effectiveCap;
+                const settingsCapEl = document.getElementById('settings-cap');
+                if (settingsCapEl) settingsCapEl.textContent = effectiveCap;
                 document.getElementById('frame-num').textContent = data.people_in_frame;
 
                 // Dynamic safety thresholds update
                 updateThresholdsUI(effectiveCap);
 
+                setSystemOnline(true);
+
                 // Dynamic zone status evaluation
                 const zone = evaluateZone(peopleInside, effectiveCap);
+                const vacancy = Math.max(effectiveCap - peopleInside, 0);
 
-                // Update Zone Badge
-                const badge = document.getElementById('zone-badge');
-                badge.className = zone.color;
-                badge.innerHTML = `<span class="zone-icon">${ZONE_ICONS[zone.color]}</span><span id="zone-text">${zone.label}</span>`;
+                // Full-width status banner at the top of the page
+                const banner = document.getElementById('status-banner');
+                banner.className = zone.color;
+                document.getElementById('sb-icon').innerHTML = ZONE_ICONS[zone.color];
+                document.getElementById('zone-text').textContent = zone.label;
 
-                // Smart Overcrowding Warning & Exit Calculator
-                const alertBox = document.getElementById('critical-alert-box');
-                const exitNumEl = document.getElementById('overcrowd-exit-num');
-                const critNeededEl = document.getElementById('crit-needed-val');
-                const critInsideEl = document.getElementById('crit-inside-val');
-                const critTargetEl = document.getElementById('crit-target-val');
-                const critCapEl = document.getElementById('crit-cap-val');
+                // Vacancy message: capacity - people inside
+                document.getElementById('vacancy-num').textContent = vacancy;
+                document.getElementById('vacancy-word').textContent = vacancy === 1 ? 'spot' : 'spots';
+                document.getElementById('vac-cap').textContent = effectiveCap;
+                document.getElementById('vac-inside').textContent = peopleInside;
 
+                // CRITICAL: cover the whole page and say how many people must leave
+                const critScreen = document.getElementById('critical-screen');
                 if (zone.isCritical) {
-                    const upperMediumThreshold = Math.floor(effectiveCap * 0.9);
-                    const peopleToExit = Math.max(1, peopleInside - upperMediumThreshold);
+                    // highest headcount that is no longer critical (matches the thresholds shown in the UI)
+                    const safeLevel = Math.max(Math.ceil(effectiveCap * 0.9) - 1, 0);
+                    const peopleToExit = Math.max(1, peopleInside - safeLevel);
 
-                    if (exitNumEl) exitNumEl.textContent = peopleToExit;
-                    if (critNeededEl) critNeededEl.textContent = peopleToExit;
-                    if (critInsideEl) critInsideEl.textContent = peopleInside;
-                    if (critTargetEl) critTargetEl.textContent = upperMediumThreshold;
-                    if (critCapEl) critCapEl.textContent = effectiveCap;
+                    document.getElementById('cs-exit-num').textContent = peopleToExit;
+                    document.getElementById('cs-exit-text').textContent =
+                        (peopleToExit === 1 ? 'person' : 'people') + ' must leave the venue now';
+                    document.getElementById('cs-inside').textContent = peopleInside;
+                    document.getElementById('cs-cap').textContent = effectiveCap;
+                    document.getElementById('cs-vacancy').textContent = vacancy;
+                    document.getElementById('cs-target').textContent = safeLevel;
 
-                    if (alertBox) alertBox.style.display = 'block';
+                    critScreen.classList.add('open');
                     document.body.classList.add('critical-active');
                     startAudioAlarm();
                 } else {
-                    if (alertBox) alertBox.style.display = 'none';
+                    critScreen.classList.remove('open');
                     document.body.classList.remove('critical-active');
                     stopAudioAlarm();
                 }
-
-                // Relocated fixed bottom footer counters (active only in critical mode)
-                const footerEntryEl = document.getElementById('footer-entry-num');
-                const footerExitEl = document.getElementById('footer-exit-num');
-                const footerInsideEl = document.getElementById('footer-inside-num');
-                if (footerEntryEl) footerEntryEl.textContent = data.entry_count;
-                if (footerExitEl) footerExitEl.textContent = data.exit_count;
-                if (footerInsideEl) footerInsideEl.textContent = peopleInside;
 
                 // Flash the screen red the moment the zone becomes CRITICAL (red),
                 // for a fraction of a second, to grab attention.
@@ -555,9 +625,13 @@
             }
 
             function refresh() {
-                fetch('/status').then(r => r.json()).then(data => {
+                fetch('/status').then(r => {
+                    if (r.status === 401) { window.location.href = '/login'; throw new Error('login required'); }
+                    return r.json();
+                }).then(data => {
                     renderDashboard(data);
                 }).catch(err => {
+                    setSystemOnline(false);
                     console.error("Status fetch error:", err);
                 });
             }
@@ -569,3 +643,20 @@
                 if (document.getElementById('tab-past').classList.contains('active')) fetchPastData();
             }, 5000);
         
+
+            // ---- Header: system status + live clock (display only) ----
+            function setSystemOnline(online) {
+                const dot = document.getElementById('sys-dot');
+                const txt = document.getElementById('sys-text');
+                if (dot) dot.classList.toggle('offline', !online);
+                if (txt) txt.textContent = online ? 'System Online' : 'System Offline';
+            }
+            function tickClock() {
+                const now = new Date();
+                const t = document.getElementById('clock-time');
+                const d = document.getElementById('clock-date');
+                if (t) t.textContent = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                if (d) d.textContent = now.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' });
+            }
+            tickClock();
+            setInterval(tickClock, 1000);
